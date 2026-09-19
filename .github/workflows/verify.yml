@@ -1,0 +1,126 @@
+name: Verify NeyyDex
+
+on:
+  push:
+    branches:
+      - feature/neyydex-v12
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify exact patched baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/infyiff/backup/50f904455e3d55efc133d4c547c8acfd6796d272/dex.lua" -o /tmp/upstream-dex.lua
+          curl -fsSL "https://raw.githubusercontent.com/LorekeeperZinnia/Dex/master/LICENSE" -o /tmp/upstream-LICENSE
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          upstream = Path('/tmp/upstream-dex.lua').read_bytes()
+          actual = Path('dex.lua').read_bytes()
+
+          start_anchor = b'\t\tenv.getscriptbytecode = missing("function", getscriptbytecode)'
+          end_anchor = b'\t\tend)())'
+          assert upstream.count(start_anchor) == 1
+          start = upstream.index(start_anchor)
+          end = upstream.index(end_anchor, start) + len(end_anchor)
+          nl = '\r\n' if b'\r\n' in upstream[start:end] else '\n'
+          if upstream[end:end+2] == b'\r\n':
+              end += 2
+          elif upstream[end:end+1] == b'\n':
+              end += 1
+
+          lines = [
+              '\t\tenv.getscriptbytecode = missing("function", getscriptbytecode)',
+              '',
+              '\t\t-- other',
+              '\t\t--env.setfflag = missing("function", setfflag)',
+              '\t\tenv.request = missing("function", request or http_request or (syn and syn.request) or (http and http.request) or (fluxus and fluxus.request))',
+              '',
+              '\t\tlocal nativeDecompile = missing("function", decompile)',
+              '\t\tlocal legacyDecompile = nativeDecompile',
+              '',
+              '\t\tif not legacyDecompile and env.getscriptbytecode and env.request then',
+              '\t\t\tlocal success = pcall(function()',
+              '\t\t\t\tloadstring(oldgame:HttpGet("https://raw.githubusercontent.com/infyiff/backup/refs/heads/main/konstant.lua"))()',
+              '\t\t\tend)',
+              '\t\t\tlegacyDecompile = success and missing("function", decompile) or nil',
+              '\t\tend',
+              '',
+              '\t\tlocal NEYY_DECOMPILE_ENDPOINT = "https://neyy-luau-decompiler.apa-kah1337.workers.dev/decompile"',
+              '',
+              '\t\tlocal function neyyRemoteDecompile(bytecode)',
+              '\t\t\tlocal response = env.request({',
+              '\t\t\t\tUrl = NEYY_DECOMPILE_ENDPOINT,',
+              '\t\t\t\tMethod = "POST",',
+              '\t\t\t\tHeaders = { ["Content-Type"] = "application/octet-stream" },',
+              '\t\t\t\tBody = bytecode',
+              '\t\t\t})',
+              '\t\t\tlocal status = response and (response.StatusCode or response.Status or response.status_code)',
+              '\t\t\tlocal body = response and (response.Body or response.body)',
+              '\t\t\tif tonumber(status) ~= 200 then',
+              '\t\t\t\terror(("Neyy decompiler HTTP %s"):format(tostring(status)))',
+              '\t\t\tend',
+              '\t\t\tif type(body) ~= "string" or body == "" then',
+              '\t\t\t\terror("Neyy decompiler returned an empty response")',
+              '\t\t\tend',
+              '\t\t\treturn body',
+              '\t\tend',
+              '',
+              '\t\tif env.getscriptbytecode and env.request then',
+              '\t\t\tenv.decompile = function(scr)',
+              '\t\t\t\tlocal bytecodeOk, bytecode = pcall(env.getscriptbytecode, scr)',
+              '\t\t\t\tif bytecodeOk and type(bytecode) == "string" and #bytecode > 0 and string.byte(bytecode, 1) == 12 then',
+              '\t\t\t\t\tlocal remoteOk, remoteSource = pcall(neyyRemoteDecompile, bytecode)',
+              '\t\t\t\t\tif remoteOk then return remoteSource end',
+              '\t\t\t\t\tif legacyDecompile then return legacyDecompile(scr) end',
+              '\t\t\t\t\terror(remoteSource)',
+              '\t\t\t\tend',
+              '\t\t\t\tif legacyDecompile then return legacyDecompile(scr) end',
+              '\t\t\t\treturn nil',
+              '\t\t\tend',
+              '\t\telse',
+              '\t\t\tenv.decompile = legacyDecompile',
+              '\t\tend',
+          ]
+          expected = upstream[:start] + (nl.join(lines) + nl).encode() + upstream[end:]
+
+          old_credit = b'Position=UDim2.new(1,-110,1,-20),Size=UDim2.new(0,105,0,20),Text="Developed by Moon",'
+          new_credit = b'Position=UDim2.new(1,-225,1,-20),Size=UDim2.new(0,220,0,20),Text="Created by Moon x Reneyy-dev",'
+          assert expected.count(old_credit) == 1
+          expected = expected.replace(old_credit, new_credit, 1)
+
+          assert actual == expected, 'dex.lua contains changes outside the approved v12 and Creator patches'
+          assert actual.count(b'https://neyy-luau-decompiler.apa-kah1337.workers.dev/decompile') == 1
+          assert b'application/octet-stream' in actual
+          assert b'string.byte(bytecode, 1) == 12' in actual
+          assert b'response.StatusCode or response.Status or response.status_code' in actual
+          assert b'response.Body or response.body' in actual
+          assert b'CLOUDFLARE_API_TOKEN' not in actual
+          assert actual.count(b'Text="Created by Moon x Reneyy-dev"') == 1
+
+          readme = Path('README.md').read_text(encoding='utf-8')
+          spec = Path('docs/specs/neyydex-v12-fallback.md').read_text(encoding='utf-8')
+          plan = Path('docs/plans/neyydex-v12-integration.md').read_text(encoding='utf-8')
+          license_text = Path('LICENSE').read_text(encoding='utf-8')
+          upstream_license = Path('/tmp/upstream-LICENSE').read_text(encoding='utf-8')
+
+          assert license_text == upstream_license
+          assert 'Dex was originally created by Moon.' in readme
+          assert 'NeyyDex does not claim the original Dex implementation' in readme
+          assert 'CLOUDFLARE_API_TOKEN' not in readme
+          assert 'string.byte(bytecode, 1) == 12' in plan
+          assert 'version 12' in spec
+          print('NeyyDex verification: PASS')
+          PY
