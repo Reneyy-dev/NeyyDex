@@ -1,0 +1,57 @@
+name: Bootstrap NeyyDex Retry
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract corrected bootstrap script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+
+          source = subprocess.check_output([
+              "git", "show",
+              "56efbd5324903dac587531c738ca05cf89bb91c6:.github/workflows/bootstrap-neyydex.yml"
+          ], text=True)
+
+          marker = "        run: |\n"
+          rest = source.split(marker, 1)[1]
+          lines = []
+          for line in rest.splitlines():
+              if line.startswith("          "):
+                  lines.append(line[10:])
+              elif line == "":
+                  lines.append("")
+              else:
+                  break
+
+          script = "\n".join(lines) + "\n"
+          script = script.replace("sed -i 's/^          //' README.md\n", "")
+          script = script.replace(
+              "git rm .github/workflows/bootstrap-neyydex.yml\n",
+              "git rm .github/workflows/bootstrap-retry.yml\n"
+          )
+
+          if "sed -i 's/^          //' README.md" in script:
+              raise SystemExit("README-corrupting sed command still present")
+          if "git rm .github/workflows/bootstrap-retry.yml" not in script:
+              raise SystemExit("retry workflow cleanup rewrite missing")
+
+          Path("/tmp/neyydex-bootstrap.sh").write_text(script)
+          print("corrected bootstrap script extracted")
+          PY
+          bash /tmp/neyydex-bootstrap.sh
