@@ -11832,13 +11832,52 @@ Main = (function()
 		-- other
 		--env.setfflag = missing("function", setfflag)
 		env.request = missing("function", request or http_request or (syn and syn.request) or (http and http.request) or (fluxus and fluxus.request))
-		env.decompile = missing("function", decompile) or (env.getscriptbytecode and env.request and (function()
-			local success, err = pcall(function()
+
+		local nativeDecompile = missing("function", decompile)
+		local legacyDecompile = nativeDecompile
+
+		if not legacyDecompile and env.getscriptbytecode and env.request then
+			local success = pcall(function()
 				loadstring(oldgame:HttpGet("https://raw.githubusercontent.com/infyiff/backup/refs/heads/main/konstant.lua"))()
 			end)
+			legacyDecompile = success and missing("function", decompile) or nil
+		end
 
-			return (success and decompile) or nil
-		end)())
+		local NEYY_DECOMPILE_ENDPOINT = "https://neyy-luau-decompiler.apa-kah1337.workers.dev/decompile"
+
+		local function neyyRemoteDecompile(bytecode)
+			local response = env.request({
+				Url = NEYY_DECOMPILE_ENDPOINT,
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/octet-stream" },
+				Body = bytecode
+			})
+			local status = response and (response.StatusCode or response.Status or response.status_code)
+			local body = response and (response.Body or response.body)
+			if tonumber(status) ~= 200 then
+				error(("Neyy decompiler HTTP %s"):format(tostring(status)))
+			end
+			if type(body) ~= "string" or body == "" then
+				error("Neyy decompiler returned an empty response")
+			end
+			return body
+		end
+
+		if env.getscriptbytecode and env.request then
+			env.decompile = function(scr)
+				local bytecodeOk, bytecode = pcall(env.getscriptbytecode, scr)
+				if bytecodeOk and type(bytecode) == "string" and #bytecode > 0 and string.byte(bytecode, 1) == 12 then
+					local remoteOk, remoteSource = pcall(neyyRemoteDecompile, bytecode)
+					if remoteOk then return remoteSource end
+					if legacyDecompile then return legacyDecompile(scr) end
+					error(remoteSource)
+				end
+				if legacyDecompile then return legacyDecompile(scr) end
+				return nil
+			end
+		else
+			env.decompile = legacyDecompile
+		end
 		env.isViableDecompileScript = function(obj)
 			if obj:IsA("ModuleScript") then
 				return true
